@@ -253,8 +253,56 @@ def _classify_hex_color(fill: str | None) -> str:
 _Q_RE      = re.compile(r"^(?:Q\s*)?(\d+)\s*[-\.\)]\s+(.+)", re.IGNORECASE)
 # Matches:  "A)", "A.", "(A)", "A -"
 _CHOICE_RE = re.compile(r"^(?:\()?([A-Ea-e])\)?[\.\)\-]\s*(.+)")
-# Answer key row — "1: A, C, E" or "1- A, C, E"
-_ANS_RE    = re.compile(r"^(\d+)\s*[:\-\.]\s*([A-Ea-e][A-Ea-e,\s/]+)$", re.IGNORECASE)
+# Answer key row — "1: A", "1: A, C, E", "1- A", "1. (A)"
+_ANS_RE    = re.compile(r"^(\d+)\s*[:\-\.\)]\s*(.+)$", re.IGNORECASE)
+# "ANSWER KEY", "Answer Key:", "ANSWER KEY - Lecture 3"
+_ANSWER_KEY_HEADER_RE = re.compile(
+    r"^answer\s*keys?\s*(?:[:\-–—]|\s*$|\s+\S)", re.IGNORECASE
+)
+
+
+def _extract_answer_letters(text: str) -> list[str]:
+    """Pull A–E letters from an answer-key value like 'A', '(A)', 'A, C', or 'AC'."""
+    seen: set[str] = set()
+    letters: list[str] = []
+    for ch in re.findall(r"[A-Ea-e]", text):
+        ch = ch.upper()
+        if ch not in seen:
+            seen.add(ch)
+            letters.append(ch)
+    return letters
+
+
+def _parse_answer_key_line(line: str) -> list[tuple[int, list[str]]]:
+    """Parse one line that may contain one or more 'N: letters' answer-key entries."""
+    entries: list[tuple[int, list[str]]] = []
+    parts = re.split(r"\t|  {2,}|(?<=\S)\s+(?=\d+\s*[:\-\.\)]\s*)", line)
+    for part in parts:
+        part = part.strip()
+        if not part:
+            continue
+        m = _ANS_RE.match(part)
+        if not m:
+            continue
+        letters = _extract_answer_letters(m.group(2))
+        if letters:
+            entries.append((int(m.group(1)), letters))
+    return entries
+
+
+def _apply_text_answer_key(
+    questions: list[dict],
+    answer_key: dict[int, list[str]],
+    has_any_highlight: bool,
+) -> None:
+    """Merge a text answer key; use as fallback when highlights are missing."""
+    if not answer_key:
+        return
+    for q in questions:
+        if q["num"] not in answer_key:
+            continue
+        if not has_any_highlight or not q["correct"]:
+            q["correct"] = answer_key[q["num"]]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -322,7 +370,7 @@ def parse_docx(path: str) -> list[dict]:
         highlight = _get_para_highlight(para)
 
         # ── Answer-key section header ────────────────────────────────────────
-        if re.match(r"^answer\s*key\s*$", line, re.IGNORECASE):
+        if _ANSWER_KEY_HEADER_RE.match(line):
             if current_q and len(current_q["choices"]) == 5:
                 questions.append(current_q)
                 current_q = None
@@ -331,16 +379,8 @@ def parse_docx(path: str) -> list[dict]:
 
         # ── Text-based answer key rows ───────────────────────────────────────
         if in_answer_key:
-            for part in re.split(r"\t|  {2,}", line):
-                part = part.strip()
-                m = _ANS_RE.match(part)
-                if m:
-                    letters = [
-                        x.strip().upper()
-                        for x in re.split(r"[,/\s]+", m.group(2))
-                        if x.strip() and x.strip().upper() in "ABCDE"
-                    ]
-                    answer_key[int(m.group(1))] = letters
+            for num, letters in _parse_answer_key_line(line):
+                answer_key[num] = letters
             continue
 
         # ── Section heading ──────────────────────────────────────────────────
@@ -396,16 +436,7 @@ def parse_docx(path: str) -> list[dict]:
     if current_q and len(current_q["choices"]) == 5:
         questions.append(current_q)
 
-    # If no highlights found, fall back to text answer key
-    if not has_any_highlight and answer_key:
-        for q in questions:
-            if q["num"] in answer_key:
-                q["correct"] = answer_key[q["num"]]
-    elif not has_any_highlight:
-        # Still attach whatever answer_key was found (partial docs)
-        for q in questions:
-            if q["num"] in answer_key:
-                q["correct"] = answer_key[q["num"]]
+    _apply_text_answer_key(questions, answer_key, has_any_highlight)
 
     return questions
 
@@ -501,7 +532,7 @@ def parse_pdf(path: str) -> list[dict]:
             continue
 
         # ── Answer-key section header ────────────────────────────────────────
-        if re.match(r"^answer\s*key\s*$", line, re.IGNORECASE):
+        if _ANSWER_KEY_HEADER_RE.match(line):
             if current_q and len(current_q["choices"]) == 5:
                 questions.append(current_q)
                 current_q = None
@@ -509,16 +540,8 @@ def parse_pdf(path: str) -> list[dict]:
             continue
 
         if in_answer_key:
-            for part in re.split(r"\t|  {2,}", line):
-                part = part.strip()
-                m = _ANS_RE.match(part)
-                if m:
-                    letters = [
-                        x.strip().upper()
-                        for x in re.split(r"[,/\s]+", m.group(2))
-                        if x.strip() and x.strip().upper() in "ABCDE"
-                    ]
-                    answer_key[int(m.group(1))] = letters
+            for num, letters in _parse_answer_key_line(line):
+                answer_key[num] = letters
             continue
 
         # ── Section heading ──────────────────────────────────────────────────
@@ -575,15 +598,7 @@ def parse_pdf(path: str) -> list[dict]:
     if current_q and len(current_q["choices"]) == 5:
         questions.append(current_q)
 
-    # Fall back to text answer key if no highlight annotations found
-    if not has_any_highlight and answer_key:
-        for q in questions:
-            if q["num"] in answer_key:
-                q["correct"] = answer_key[q["num"]]
-    elif not has_any_highlight:
-        for q in questions:
-            if q["num"] in answer_key:
-                q["correct"] = answer_key[q["num"]]
+    _apply_text_answer_key(questions, answer_key, has_any_highlight)
 
     return questions
 
