@@ -538,37 +538,70 @@ def _parse_mcq_lines(
     return questions, answer_key, has_any_highlight
 
 
+def _parse_quality(questions: list[dict]) -> int:
+    """Score a parse result — favours complete questions."""
+    if not questions:
+        return 0
+    complete = sum(1 for q in questions if _question_is_complete(q))
+    return complete * 100 + len(questions)
+
+
 def _detect_column_split(words: list[dict], page_width: float) -> float | None:
-    """Return x-coordinate column split when the page looks two-column."""
+    """
+    Return a column split only when the page has a clear centre gutter.
+    Avoids false positives on single-column pages with wide/full-width text.
+    """
     if not words or page_width <= 0:
         return None
 
-    centers = [(w["x0"] + w["x1"]) / 2 for w in words if w.get("text", "").strip()]
-    if len(centers) < 20:
+    enriched = [w for w in words if w.get("text", "").strip()]
+    if len(enriched) < 24:
         return None
 
     mid = page_width / 2
-    left = sum(1 for c in centers if c < mid * 0.92)
-    right = sum(1 for c in centers if c > mid * 1.08)
-    total = len(centers)
-    if left < total * 0.12 or right < total * 0.12:
+    left_words = [w for w in enriched if (w["x0"] + w["x1"]) / 2 <= mid * 0.88]
+    right_words = [w for w in enriched if (w["x0"] + w["x1"]) / 2 >= mid * 1.12]
+
+    if len(left_words) < 12 or len(right_words) < 12:
         return None
-    return mid
+
+    max_left_x = max(w["x1"] for w in left_words)
+    min_right_x = min(w["x0"] for w in right_words)
+    gutter = min_right_x - max_left_x
+    min_gutter = max(page_width * 0.05, 24)
+    if gutter < min_gutter:
+        return None
+
+    # True columns: left block ends before centre, right block starts after centre
+    if max_left_x > mid * 1.02 or min_right_x < mid * 0.98:
+        return None
+
+    return (max_left_x + min_right_x) / 2
 
 
-def _pdfplumber_page_to_lines(page) -> list[str]:
-    """Extract lines from a PDF page, reading each column top-to-bottom."""
+def _pdfplumber_page_to_lines(page, layout: str = "auto") -> list[str]:
+    """
+    Extract lines from a PDF page.
+    layout: 'auto' (detect per page), 'single' (full width), 'two-column' (force split).
+    """
     words = page.extract_words(x_tolerance=2, y_tolerance=3, keep_blank_chars=False)
-    split = _detect_column_split(words, page.width)
 
     def _crop_lines(bbox) -> list[str]:
         cropped = page.crop(bbox)
         text = cropped.extract_text(x_tolerance=2, y_tolerance=3)
         return text.splitlines() if text else []
 
-    if split is None:
+    def _single_column_lines() -> list[str]:
         text = page.extract_text(x_tolerance=2, y_tolerance=3)
         return text.splitlines() if text else []
+
+    if layout == "single":
+        return _single_column_lines()
+
+    split = page.width / 2 if layout == "two-column" else _detect_column_split(words, page.width)
+
+    if split is None:
+        return _single_column_lines()
 
     gutter = 6
     left_bbox = (0, 0, max(split - gutter, 0), page.height)
@@ -581,7 +614,7 @@ def _pdfplumber_page_to_lines(page) -> list[str]:
     return lines
 
 
-def _fitz_page_to_lines(page) -> list[str]:
+def _fitz_page_to_lines(page, layout: str = "auto") -> list[str]:
     """Column-aware line extraction via PyMuPDF word positions."""
     words = page.get_text("words")
     if not words:
@@ -593,7 +626,6 @@ def _fitz_page_to_lines(page) -> list[str]:
         for w in words
         if w[4].strip()
     ]
-    split = _detect_column_split(word_dicts, page_width)
 
     def _cluster_to_lines(cluster_words: list) -> list[str]:
         cluster_words.sort(key=lambda w: (round(w["top"], 1), w["x0"]))
@@ -613,6 +645,11 @@ def _fitz_page_to_lines(page) -> list[str]:
             lines_out.append(" ".join(current_parts))
         return lines_out
 
+    if layout == "single":
+        return _cluster_to_lines(word_dicts)
+
+    split = page_width / 2 if layout == "two-column" else _detect_column_split(word_dicts, page_width)
+
     if split is None:
         return _cluster_to_lines(word_dicts)
 
@@ -623,6 +660,35 @@ def _fitz_page_to_lines(page) -> list[str]:
     if lines:
         lines.append("")
     lines.extend(_cluster_to_lines(right_words))
+    return lines
+
+
+def _pdf_to_lines(path: str, layout: str = "auto") -> list[str]:
+    """
+    Extract text lines from a PDF.
+    layout: 'auto' | 'single' | 'two-column'
+    """
+    lines: list[str] = []
+    if PDFPLUMBER_OK:
+        with pdfplumber.open(path) as pdf:
+            for page in pdf.pages:
+                page_lines = _pdfplumber_page_to_lines(page, layout=layout)
+                if page_lines:
+                    lines.extend(page_lines)
+                    lines.append("")
+    elif FITZ_OK:
+        doc = fitz.open(path)
+        for page in doc:
+            page_lines = _fitz_page_to_lines(page, layout=layout)
+            if page_lines:
+                lines.extend(page_lines)
+                lines.append("")
+        doc.close()
+    else:
+        raise RuntimeError(
+            "No PDF library found.\n"
+            "  pip install pdfplumber\n  pip install pymupdf"
+        )
     return lines
 
 
@@ -735,47 +801,35 @@ def _pdf_highlight_map(path: str) -> dict[int, str]:
     return result
 
 
-def _pdf_to_lines(path: str) -> list[str]:
-    """Extract text lines from a PDF, column-aware for two-column layouts."""
-    lines: list[str] = []
-    if PDFPLUMBER_OK:
-        with pdfplumber.open(path) as pdf:
-            for page in pdf.pages:
-                page_lines = _pdfplumber_page_to_lines(page)
-                if page_lines:
-                    lines.extend(page_lines)
-                    lines.append("")
-    elif FITZ_OK:
-        doc = fitz.open(path)
-        for page in doc:
-            page_lines = _fitz_page_to_lines(page)
-            if page_lines:
-                lines.extend(page_lines)
-                lines.append("")
-        doc.close()
-    else:
-        raise RuntimeError(
-            "No PDF library found.\n"
-            "  pip install pdfplumber\n  pip install pymupdf"
-        )
-    return lines
-
-
 def parse_pdf(path: str) -> list[dict]:
     """
     Parse a PDF MCQ file.
-    Priority:
+    Tries auto, single-column, and two-column extraction; keeps the best result.
+    Priority for answers:
       1. Highlight annotations on choice lines → answer key.
       2. Text-based ANSWER KEY section.
     """
-    hl_map = _pdf_highlight_map(path)
-    lines = _pdf_to_lines(path)
+    hl_map = _pdf_highlight_map(path) or None
 
-    questions, answer_key, has_any_highlight = _parse_mcq_lines(
-        lines, hl_map=hl_map or None
-    )
-    _apply_text_answer_key(questions, answer_key, has_any_highlight)
-    return questions
+    best_questions: list[dict] = []
+    best_answer_key: dict[int, list[str]] = {}
+    best_has_highlight = False
+    best_score = -1
+
+    for layout in ("auto", "single", "two-column"):
+        lines = _pdf_to_lines(path, layout=layout)
+        questions, answer_key, has_any_highlight = _parse_mcq_lines(
+            lines, hl_map=hl_map
+        )
+        score = _parse_quality(questions)
+        if score > best_score:
+            best_score = score
+            best_questions = questions
+            best_answer_key = answer_key
+            best_has_highlight = has_any_highlight
+
+    _apply_text_answer_key(best_questions, best_answer_key, best_has_highlight)
+    return best_questions
 
 
 # ─────────────────────────────────────────────────────────────────────────────
