@@ -539,11 +539,116 @@ def _parse_mcq_lines(
 
 
 def _parse_quality(questions: list[dict]) -> int:
-    """Score a parse result — favours complete questions."""
+    """Score a parse result — favours complete questions with full text."""
     if not questions:
         return 0
-    complete = sum(1 for q in questions if _question_is_complete(q))
-    return complete * 100 + len(questions)
+
+    score = 0
+    for q in questions:
+        if not _question_is_complete(q):
+            score -= 100
+            continue
+
+        score += 200
+        stem = q.get("stem", "")
+        if len(stem) >= 40:
+            score += 15
+        elif len(stem) < 25:
+            score -= 30
+
+        for letter in "ABCDE":
+            if letter not in q.get("choices", {}):
+                score -= 50
+                continue
+            text = q["choices"][letter].strip()
+            if len(text) < 10:
+                score -= 25
+            # Clipped fragments from bad column splits
+            if text and text[0].islower():
+                score -= 80
+            if re.match(r"^[\)\]\},;]", text):
+                score -= 80
+            if re.match(r"^[a-z]{2,8}[\)\],]", text):
+                score -= 80
+
+    score += len(questions)
+    return score
+
+
+def _group_words_into_lines(words: list[dict], y_tolerance: float = 4.0) -> list[str]:
+    """Group positioned words into reading-order text lines."""
+    if not words:
+        return []
+
+    max_x = max(w["x1"] for w in words)
+    x_gap_threshold = max(max_x * 0.12, 40)
+
+    sorted_words = sorted(words, key=lambda w: (w["top"], w["x0"]))
+    lines: list[str] = []
+    current_top: float | None = None
+    current_parts: list[str] = []
+    prev_x1: float | None = None
+
+    for w in sorted_words:
+        top = w["top"]
+        new_row = current_top is not None and abs(top - current_top) > y_tolerance
+        big_gap = prev_x1 is not None and (w["x0"] - prev_x1) > x_gap_threshold
+
+        if new_row or big_gap:
+            if current_parts:
+                lines.append(" ".join(current_parts))
+            current_parts = [w["text"]]
+            current_top = top
+        else:
+            current_parts.append(w["text"])
+            if current_top is None:
+                current_top = top
+        prev_x1 = w["x1"]
+
+    if current_parts:
+        lines.append(" ".join(current_parts))
+    return lines
+
+
+def _split_words_by_column(words: list[dict], split: float) -> tuple[list[dict], list[dict]]:
+    """Assign words to left/right columns by centre x — never crop or clip."""
+    left: list[dict] = []
+    right: list[dict] = []
+    for w in words:
+        centre = (w["x0"] + w["x1"]) / 2
+        if centre <= split:
+            left.append(w)
+        else:
+            right.append(w)
+    return left, right
+
+
+def _page_words_to_lines(words: list[dict], page_width: float, layout: str) -> list[str]:
+    """
+    Build text lines from positioned words.
+    layout: 'auto' | 'single' | 'two-column'
+    """
+    if not words:
+        return []
+
+    if layout == "single":
+        return _group_words_into_lines(words)
+
+    split = _detect_column_split(words, page_width)
+    if layout == "two-column" and split is None:
+        # Do not force a mid-page split — that cuts single-column text in half.
+        return _group_words_into_lines(words)
+
+    if split is None:
+        return _group_words_into_lines(words)
+
+    left, right = _split_words_by_column(words, split)
+    lines: list[str] = []
+    lines.extend(_group_words_into_lines(left))
+    if lines and right:
+        lines.append("")
+    lines.extend(_group_words_into_lines(right))
+    return lines
 
 
 def _detect_column_split(words: list[dict], page_width: float) -> float | None:
@@ -580,38 +685,9 @@ def _detect_column_split(words: list[dict], page_width: float) -> float | None:
 
 
 def _pdfplumber_page_to_lines(page, layout: str = "auto") -> list[str]:
-    """
-    Extract lines from a PDF page.
-    layout: 'auto' (detect per page), 'single' (full width), 'two-column' (force split).
-    """
+    """Extract lines from a PDF page using word positions (no cropping)."""
     words = page.extract_words(x_tolerance=2, y_tolerance=3, keep_blank_chars=False)
-
-    def _crop_lines(bbox) -> list[str]:
-        cropped = page.crop(bbox)
-        text = cropped.extract_text(x_tolerance=2, y_tolerance=3)
-        return text.splitlines() if text else []
-
-    def _single_column_lines() -> list[str]:
-        text = page.extract_text(x_tolerance=2, y_tolerance=3)
-        return text.splitlines() if text else []
-
-    if layout == "single":
-        return _single_column_lines()
-
-    split = page.width / 2 if layout == "two-column" else _detect_column_split(words, page.width)
-
-    if split is None:
-        return _single_column_lines()
-
-    gutter = 6
-    left_bbox = (0, 0, max(split - gutter, 0), page.height)
-    right_bbox = (min(split + gutter, page.width), 0, page.width, page.height)
-    lines: list[str] = []
-    lines.extend(_crop_lines(left_bbox))
-    if lines:
-        lines.append("")
-    lines.extend(_crop_lines(right_bbox))
-    return lines
+    return _page_words_to_lines(words, page.width, layout)
 
 
 def _fitz_page_to_lines(page, layout: str = "auto") -> list[str]:
@@ -620,47 +696,12 @@ def _fitz_page_to_lines(page, layout: str = "auto") -> list[str]:
     if not words:
         return []
 
-    page_width = page.rect.width
     word_dicts = [
         {"text": w[4], "x0": w[0], "x1": w[2], "top": w[1], "bottom": w[3]}
         for w in words
         if w[4].strip()
     ]
-
-    def _cluster_to_lines(cluster_words: list) -> list[str]:
-        cluster_words.sort(key=lambda w: (round(w["top"], 1), w["x0"]))
-        lines_out: list[str] = []
-        current_top: float | None = None
-        current_parts: list[str] = []
-        for w in cluster_words:
-            top = round(w["top"], 1)
-            if current_top is None or abs(top - current_top) <= 3:
-                current_parts.append(w["text"])
-                current_top = top if current_top is None else current_top
-            else:
-                lines_out.append(" ".join(current_parts))
-                current_parts = [w["text"]]
-                current_top = top
-        if current_parts:
-            lines_out.append(" ".join(current_parts))
-        return lines_out
-
-    if layout == "single":
-        return _cluster_to_lines(word_dicts)
-
-    split = page_width / 2 if layout == "two-column" else _detect_column_split(word_dicts, page_width)
-
-    if split is None:
-        return _cluster_to_lines(word_dicts)
-
-    left_words = [w for w in word_dicts if (w["x0"] + w["x1"]) / 2 < split]
-    right_words = [w for w in word_dicts if (w["x0"] + w["x1"]) / 2 >= split]
-    lines: list[str] = []
-    lines.extend(_cluster_to_lines(left_words))
-    if lines:
-        lines.append("")
-    lines.extend(_cluster_to_lines(right_words))
-    return lines
+    return _page_words_to_lines(word_dicts, page.rect.width, layout)
 
 
 def _pdf_to_lines(path: str, layout: str = "auto") -> list[str]:
