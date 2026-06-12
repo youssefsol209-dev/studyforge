@@ -19,8 +19,14 @@ Answer detection — THREE methods, tried in priority order:
   3. No answer info found → card is still created, back shows "Not specified"
 
 Supported input formats:
-  • .docx  — any Word MCQ file with highlighted choices or an answer key
-  • .pdf   — any PDF MCQ file with highlight annotations or an answer key
+  • .docx  — Word MCQ files (highlighted choices or answer key)
+  • .pdf   — PDF MCQ files (including two-column layouts)
+
+Question numbering variants:
+  1.  1)  1-  1:  1-*  Q1.  Question 1.  1 Question
+
+Choice labelling variants:
+  A.  A)  (A)  [A]  A-  A:  A text
 
 Usage:
     python mcq_to_anki.py Lecture3_MCQs.docx
@@ -246,22 +252,83 @@ def _classify_hex_color(fill: str | None) -> str:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Regex patterns
+# Regex patterns — flexible MCQ format matching
 # ─────────────────────────────────────────────────────────────────────────────
 
-# Matches:  "1-", "1.", "1)", "Q1.", "Q1:" — stem may be on the next line
-_Q_RE      = re.compile(r"^(?:Q\s*)?(\d+)\s*[-\.\)]\s+(.+)", re.IGNORECASE)
-_Q_NUM_ONLY_RE = re.compile(r"^(?:Q\s*)?(\d+)\s*[-\.\)]\s*$", re.IGNORECASE)
-# Matches:  "A)", "A.", "(A)", "A -"
-_CHOICE_RE = re.compile(r"^(?:\()?([A-Ea-e])\)?[\.\)\-]\s*(.*)")
-# Document / section titles like "ENDO MCQs" (not a question stem)
-_DOC_TITLE_RE = re.compile(r"^[\w\s\-–—]+MCQs?\s*$", re.IGNORECASE)
-# Answer key row — "1: A", "1: A, C, E", "1- A", "1. (A)"
-_ANS_RE    = re.compile(r"^(\d+)\s*[:\-\.\)]\s*(.+)$", re.IGNORECASE)
-# "ANSWER KEY", "Answer Key:", "ANSWER KEY - Lecture 3"
+# Question prefixes: 1.  1)  1-  1:  1-*  Q1.  Question 1.  1 Question
+_Q_PREFIX_RE = r"(?:Q\s*|Question\s+)?"
+_Q_SEP_CHARS = r"[\-\.\):\]:;]+[\*•·▪▫◦→]*"
+_Q_WITH_SEP_RE = re.compile(
+    rf"^{_Q_PREFIX_RE}(\d+)\s*(?:{_Q_SEP_CHARS})?\s*(.+)$",
+    re.IGNORECASE,
+)
+_Q_NUM_ONLY_RE = re.compile(
+    rf"^{_Q_PREFIX_RE}(\d+)\s*(?:{_Q_SEP_CHARS})?\s*$",
+    re.IGNORECASE,
+)
+
+# Choices: A.  A)  (A)  [A]  A-  A:  A text
+_CHOICE_RE = re.compile(
+    r"^(?:[\[\(]\s*)?"
+    r"([A-Ea-e])"
+    r"(?:[\]\)]\s*)?"
+    r"(?:"
+    r"[\.\)\-:;]\s*"
+    r"|"
+    r"\s+"
+    r")?"
+    r"(.*)$",
+    re.IGNORECASE,
+)
+
+# Document / section titles
+_DOC_TITLE_RE = re.compile(
+    r"^[\w\s\-–—\d]+(?:MCQs?|Exam|Quiz|Test|Paper|Assessment)\b",
+    re.IGNORECASE,
+)
+
+# Answer key row — "1: A", "1-* A", "1. A, C, E"
+_ANS_RE = re.compile(
+    rf"^{_Q_PREFIX_RE}(\d+)\s*(?:{_Q_SEP_CHARS})?\s*(.+)$",
+    re.IGNORECASE,
+)
 _ANSWER_KEY_HEADER_RE = re.compile(
     r"^answer\s*keys?\s*(?:[:\-–—]|\s*$|\s+\S)", re.IGNORECASE
 )
+
+_MIN_CHOICES = 4
+
+
+def _match_question(line: str) -> tuple[int, str] | None:
+    """Return (question_number, stem) for common numbered-question formats."""
+    m = _Q_WITH_SEP_RE.match(line.strip())
+    if not m:
+        return None
+    stem = m.group(2).strip()
+    if not stem:
+        return None
+    return int(m.group(1)), stem
+
+
+def _match_question_num_only(line: str) -> int | None:
+    m = _Q_NUM_ONLY_RE.match(line.strip())
+    return int(m.group(1)) if m else None
+
+
+def _match_choice(line: str) -> tuple[str, str] | None:
+    """Return (letter, text) for A–E choice lines."""
+    m = _CHOICE_RE.match(line.strip())
+    if not m:
+        return None
+    return m.group(1).upper(), m.group(2).strip()
+
+
+def _looks_like_question(line: str) -> bool:
+    return _match_question(line) is not None or _match_question_num_only(line) is not None
+
+
+def _looks_like_choice(line: str) -> bool:
+    return _match_choice(line) is not None
 
 
 def _extract_answer_letters(text: str) -> list[str]:
@@ -279,7 +346,14 @@ def _extract_answer_letters(text: str) -> list[str]:
 def _parse_answer_key_line(line: str) -> list[tuple[int, list[str]]]:
     """Parse one line that may contain one or more 'N: letters' answer-key entries."""
     entries: list[tuple[int, list[str]]] = []
-    parts = re.split(r"\t|  {2,}|(?<=\S)\s+(?=\d+\s*[:\-\.\)]\s*)", line)
+    parts = re.split(
+        r"\t|  {2,}|(?<=\S)\s+(?="
+        + _Q_PREFIX_RE
+        + r"\d+\s*(?:"
+        + _Q_SEP_CHARS
+        + r")?\s*\S)",
+        line,
+    )
     for part in parts:
         part = part.strip()
         if not part:
@@ -309,7 +383,16 @@ def _apply_text_answer_key(
 
 
 def _question_is_complete(q: dict | None) -> bool:
-    return q is not None and len(q.get("choices", {})) == 5
+    if q is None:
+        return False
+    choices = q.get("choices", {})
+    if len(choices) < _MIN_CHOICES:
+        return False
+    present = [letter for letter in "ABCDE" if letter in choices]
+    for i, letter in enumerate(present):
+        if letter != "ABCDE"[i]:
+            return False
+    return len(present) >= _MIN_CHOICES
 
 
 def _last_choice_letter(choices: dict[str, str]) -> str | None:
@@ -321,7 +404,7 @@ def _last_choice_letter(choices: dict[str, str]) -> str | None:
 
 
 def _is_section_heading(line: str, raw: str) -> bool:
-    if _Q_RE.match(line) or _Q_NUM_ONLY_RE.match(line) or _CHOICE_RE.match(line):
+    if _looks_like_question(line) or _looks_like_choice(line):
         return False
     if len(line) >= 120:
         return False
@@ -392,15 +475,15 @@ def _parse_mcq_lines(
             current_section = line
             continue
 
-        m_num_only = _Q_NUM_ONLY_RE.match(line)
-        if m_num_only:
+        m_num_only = _match_question_num_only(line)
+        if m_num_only is not None:
             if _question_is_complete(current_q):
                 questions.append(current_q)
                 current_q = None
-            pending_q_num = int(m_num_only.group(1))
+            pending_q_num = m_num_only
             continue
 
-        if pending_q_num is not None and not _CHOICE_RE.match(line):
+        if pending_q_num is not None and not _looks_like_choice(line):
             current_q = {
                 "num":     pending_q_num,
                 "stem":    line,
@@ -411,24 +494,24 @@ def _parse_mcq_lines(
             pending_q_num = None
             continue
 
-        m_q = _Q_RE.match(line)
+        m_q = _match_question(line)
         if m_q:
             pending_q_num = None
             if _question_is_complete(current_q):
                 questions.append(current_q)
+            num, stem = m_q
             current_q = {
-                "num":     int(m_q.group(1)),
-                "stem":    m_q.group(2).strip(),
+                "num":     num,
+                "stem":    stem,
                 "choices": {},
                 "correct": [],
                 "section": current_section,
             }
             continue
 
-        m_c = _CHOICE_RE.match(line)
+        m_c = _match_choice(line)
         if m_c and current_q is not None:
-            letter = m_c.group(1).upper()
-            text   = m_c.group(2).strip()
+            letter, text = m_c
             current_q["choices"][letter] = text
 
             if highlight == "correct":
