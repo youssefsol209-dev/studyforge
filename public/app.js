@@ -87,14 +87,58 @@ function formatBytes(b) {
 // ── LocalStorage helpers ──────────────────────────────────
 const LS_KEY = 'mcqflush_edits';
 
-function loadEdits() {
+function loadAllEdits() {
   try { return JSON.parse(localStorage.getItem(LS_KEY) || '{}'); }
   catch { return {}; }
 }
 
-function saveEdits(edits) {
-  localStorage.setItem(LS_KEY, JSON.stringify(edits));
+/** Drop legacy flat format (keys were question indices, not deck names). */
+function normalizeEditsStore() {
+  const all = loadAllEdits();
+  const hasLegacyFlat = Object.entries(all).some(
+    ([k, v]) => /^\d+$/.test(k) && v && typeof v === 'object'
+  );
+  if (!hasLegacyFlat) return;
+
+  const deckScoped = {};
+  for (const [k, v] of Object.entries(all)) {
+    if (!/^\d+$/.test(k)) deckScoped[k] = v;
+  }
+  if (Object.keys(deckScoped).length) saveAllEdits(deckScoped);
+  else localStorage.removeItem(LS_KEY);
 }
+
+function saveAllEdits(all) {
+  if (!all || Object.keys(all).length === 0) localStorage.removeItem(LS_KEY);
+  else localStorage.setItem(LS_KEY, JSON.stringify(all));
+}
+
+function loadEdits(deckName) {
+  if (!deckName) return {};
+  return loadAllEdits()[deckName] || {};
+}
+
+function saveEditsForDeck(deckName, edits) {
+  if (!deckName) return;
+  const all = loadAllEdits();
+  if (!edits || Object.keys(edits).length === 0) delete all[deckName];
+  else all[deckName] = edits;
+  saveAllEdits(all);
+}
+
+function clearEditsForDeck(deckName) {
+  if (!deckName) return;
+  const all = loadAllEdits();
+  if (!(deckName in all)) return;
+  delete all[deckName];
+  saveAllEdits(all);
+}
+
+function clearAllEdits() {
+  localStorage.removeItem(LS_KEY);
+}
+
+normalizeEditsStore();
 
 // Stable key = the question's index in the original server array (_origIdx)
 function qKey(mcq) {
@@ -102,8 +146,8 @@ function qKey(mcq) {
 }
 
 // Apply any saved edits onto an MCQ array — returns new objects
-function applyEdits(mcqs) {
-  const edits = loadEdits();
+function applyEdits(mcqs, deckName = currentDeckName) {
+  const edits = loadEdits(deckName);
   return mcqs.map(mcq => {
     const key = qKey(mcq);
     if (!edits[key]) return { ...mcq };
@@ -174,10 +218,10 @@ function renderLibrary() {
     card.querySelector('.lib-load-btn').addEventListener('click', () => {
       const fresh = loadLibrary()[i];
       if (!fresh) return;
-      currentMCQs  = fresh.mcqs.map((q, idx) => ({ ...q, _origIdx: q._origIdx ?? idx }));
-      currentMCQs  = applyEdits(currentMCQs);
-      shuffledMCQs = shuffleMCQs(currentMCQs);
       currentDeckName = fresh.filename;
+      currentMCQs  = fresh.mcqs.map((q, idx) => ({ ...q, _origIdx: q._origIdx ?? idx }));
+      currentMCQs  = applyEdits(currentMCQs, fresh.filename);
+      shuffledMCQs = shuffleMCQs(currentMCQs);
       currentIdx   = 0; score = 0; wrongIndices = [];
       renderMCQs(shuffledMCQs);
       document.getElementById('mcqSection').scrollIntoView({ behavior: 'smooth' });
@@ -186,9 +230,18 @@ function renderLibrary() {
 
     card.querySelector('.lib-delete-btn').addEventListener('click', () => {
       const lib = loadLibrary();
+      const removed = lib[i];
       lib.splice(i, 1);
       saveLibrary(lib);
+      if (removed?.filename) clearEditsForDeck(removed.filename);
+      if (removed?.filename && currentDeckName === removed.filename) {
+        currentMCQs = [];
+        shuffledMCQs = [];
+        currentDeckName = null;
+        mcqSection.hidden = true;
+      }
       renderLibrary();
+      showToast(`Removed "${removed?.filename ?? 'deck'}"`, 'info');
     });
 
     grid.appendChild(card);
@@ -198,8 +251,13 @@ function renderLibrary() {
 document.getElementById('clearLibraryBtn').addEventListener('click', () => {
   if (!loadLibrary().length) return;
   localStorage.removeItem(LIB_KEY);
+  clearAllEdits();
+  currentMCQs = [];
+  shuffledMCQs = [];
+  currentDeckName = null;
+  mcqSection.hidden = true;
   renderLibrary();
-  showToast('Library cleared.', 'info');
+  showToast('Library and saved edits cleared.', 'info');
 });
 
 // Import a .deckagent.json file into the library
@@ -424,13 +482,13 @@ generateBtn.addEventListener('click', async () => {
       throw new Error(err.error || `Server error ${res.status}`);
     }
 
+    currentDeckName = currentFile.name;
     currentMCQs  = (await res.json()).map((q, i) => ({ ...q, _origIdx: i }));
-    currentMCQs  = applyEdits(currentMCQs);
+    currentMCQs  = applyEdits(currentMCQs, currentFile.name);
     shuffledMCQs = shuffleMCQs(currentMCQs);
     currentIdx   = 0;
     score        = 0;
     wrongIndices = [];
-    currentDeckName = currentFile.name;
     saveToLibrary(currentFile.name, currentMCQs);
     renderMCQs(shuffledMCQs);
   });
@@ -840,12 +898,14 @@ function renderMCQs(mcqs) {
       // Save
       saveReasonBtn.addEventListener('click', () => {
         const val = reasonTA.value.trim();
-        const edits = loadEdits();
+        const deckName = currentDeckName;
+        if (!deckName) { showToast('No active deck to save to.', 'error'); return; }
+        const edits = loadEdits(deckName);
         const key   = qKey(mcq);   // always _origIdx
         if (!edits[key]) edits[key] = {};
         if (!edits[key].reasoning) edits[key].reasoning = {};
         edits[key].reasoning[idx] = val;
-        saveEdits(edits);
+        saveEditsForDeck(deckName, edits);
         if (!mcq._reasoning) mcq._reasoning = {};
         mcq._reasoning[idx] = val;
         showToast('Reasoning saved!', 'success');
@@ -976,13 +1036,16 @@ function renderMCQs(mcqs) {
       }
 
       // Persist to localStorage in original order
-      const edits = loadEdits();
-      const key   = qKey(mcq);
-      if (!edits[key]) edits[key] = {};
-      edits[key].question = mcq.question;
-      edits[key].choices  = [...newChoicesByOrig];
-      edits[key].answers  = [...newAnswersByOrig];
-      saveEdits(edits);
+      const deckName = currentDeckName;
+      if (deckName) {
+        const edits = loadEdits(deckName);
+        const key   = qKey(mcq);
+        if (!edits[key]) edits[key] = {};
+        edits[key].question = mcq.question;
+        edits[key].choices  = [...newChoicesByOrig];
+        edits[key].answers  = [...newAnswersByOrig];
+        saveEditsForDeck(deckName, edits);
+      }
 
       // Update visible question text and choice texts
       qEl.querySelector('.q-text').textContent = mcq.question;
