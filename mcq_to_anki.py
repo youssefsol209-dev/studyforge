@@ -249,10 +249,13 @@ def _classify_hex_color(fill: str | None) -> str:
 # Regex patterns
 # ─────────────────────────────────────────────────────────────────────────────
 
-# Matches:  "1-", "1.", "1)", "Q1.", "Q1:"
+# Matches:  "1-", "1.", "1)", "Q1.", "Q1:" — stem may be on the next line
 _Q_RE      = re.compile(r"^(?:Q\s*)?(\d+)\s*[-\.\)]\s+(.+)", re.IGNORECASE)
+_Q_NUM_ONLY_RE = re.compile(r"^(?:Q\s*)?(\d+)\s*[-\.\)]\s*$", re.IGNORECASE)
 # Matches:  "A)", "A.", "(A)", "A -"
-_CHOICE_RE = re.compile(r"^(?:\()?([A-Ea-e])\)?[\.\)\-]\s*(.+)")
+_CHOICE_RE = re.compile(r"^(?:\()?([A-Ea-e])\)?[\.\)\-]\s*(.*)")
+# Document / section titles like "ENDO MCQs" (not a question stem)
+_DOC_TITLE_RE = re.compile(r"^[\w\s\-–—]+MCQs?\s*$", re.IGNORECASE)
 # Answer key row — "1: A", "1: A, C, E", "1- A", "1. (A)"
 _ANS_RE    = re.compile(r"^(\d+)\s*[:\-\.\)]\s*(.+)$", re.IGNORECASE)
 # "ANSWER KEY", "Answer Key:", "ANSWER KEY - Lecture 3"
@@ -305,6 +308,241 @@ def _apply_text_answer_key(
             q["correct"] = answer_key[q["num"]]
 
 
+def _question_is_complete(q: dict | None) -> bool:
+    return q is not None and len(q.get("choices", {})) == 5
+
+
+def _last_choice_letter(choices: dict[str, str]) -> str | None:
+    last: str | None = None
+    for letter in "ABCDE":
+        if letter in choices:
+            last = letter
+    return last
+
+
+def _is_section_heading(line: str, raw: str) -> bool:
+    if _Q_RE.match(line) or _Q_NUM_ONLY_RE.match(line) or _CHOICE_RE.match(line):
+        return False
+    if len(line) >= 120:
+        return False
+    if _DOC_TITLE_RE.match(line) and "?" not in line:
+        return True
+    if (
+        re.match(r"^\s{2}.{3,}\s{2}$", raw)
+        or re.match(r"^[A-Z][^a-z]{4,}$", line)
+        or re.match(r"^(PART|Section|Chapter)\s", line, re.IGNORECASE)
+    ):
+        return True
+    return False
+
+
+def _apply_pdf_highlight(current_q: dict, letter: str, line: str, text: str, hl_map: dict) -> None:
+    for candidate in (line.lower(), text.lower()):
+        for hl_text, cls in hl_map.items():
+            if candidate in hl_text or hl_text in candidate:
+                if cls == "correct" and letter not in current_q["correct"]:
+                    current_q["correct"].append(letter)
+                return
+
+
+def _parse_mcq_lines(
+    lines: list[str],
+    *,
+    raw_lines: list[str] | None = None,
+    highlights: list[str] | None = None,
+    hl_map: dict | None = None,
+) -> tuple[list[dict], dict[int, list[str]], bool]:
+    """
+    Shared MCQ body parser for .docx and .pdf text streams.
+    Supports numbered stems (1.), lettered choices (A.), wrapped lines,
+    and question numbers split across lines.
+    """
+    if raw_lines is None:
+        raw_lines = lines
+    if highlights is None:
+        highlights = ["none"] * len(lines)
+
+    questions: list[dict] = []
+    answer_key: dict[int, list[str]] = {}
+    current_section = ""
+    in_answer_key = False
+    current_q: dict | None = None
+    pending_q_num: int | None = None
+    has_any_highlight = bool(hl_map)
+
+    for raw, line, highlight in zip(raw_lines, lines, highlights):
+        line = line.strip()
+        if not line:
+            continue
+
+        if _ANSWER_KEY_HEADER_RE.match(line):
+            if _question_is_complete(current_q):
+                questions.append(current_q)
+                current_q = None
+            pending_q_num = None
+            in_answer_key = True
+            continue
+
+        if in_answer_key:
+            for num, letters in _parse_answer_key_line(line):
+                answer_key[num] = letters
+            continue
+
+        if _is_section_heading(line, raw):
+            current_section = line
+            continue
+
+        m_num_only = _Q_NUM_ONLY_RE.match(line)
+        if m_num_only:
+            if _question_is_complete(current_q):
+                questions.append(current_q)
+                current_q = None
+            pending_q_num = int(m_num_only.group(1))
+            continue
+
+        if pending_q_num is not None and not _CHOICE_RE.match(line):
+            current_q = {
+                "num":     pending_q_num,
+                "stem":    line,
+                "choices": {},
+                "correct": [],
+                "section": current_section,
+            }
+            pending_q_num = None
+            continue
+
+        m_q = _Q_RE.match(line)
+        if m_q:
+            pending_q_num = None
+            if _question_is_complete(current_q):
+                questions.append(current_q)
+            current_q = {
+                "num":     int(m_q.group(1)),
+                "stem":    m_q.group(2).strip(),
+                "choices": {},
+                "correct": [],
+                "section": current_section,
+            }
+            continue
+
+        m_c = _CHOICE_RE.match(line)
+        if m_c and current_q is not None:
+            letter = m_c.group(1).upper()
+            text   = m_c.group(2).strip()
+            current_q["choices"][letter] = text
+
+            if highlight == "correct":
+                has_any_highlight = True
+                if letter not in current_q["correct"]:
+                    current_q["correct"].append(letter)
+            elif highlight == "wrong":
+                has_any_highlight = True
+            elif hl_map:
+                _apply_pdf_highlight(current_q, letter, line, text, hl_map)
+
+            continue
+
+        if current_q is not None:
+            last_letter = _last_choice_letter(current_q["choices"])
+            if last_letter:
+                current_q["choices"][last_letter] += " " + line
+            else:
+                current_q["stem"] += " " + line
+
+    if _question_is_complete(current_q):
+        questions.append(current_q)
+
+    return questions, answer_key, has_any_highlight
+
+
+def _detect_column_split(words: list[dict], page_width: float) -> float | None:
+    """Return x-coordinate column split when the page looks two-column."""
+    if not words or page_width <= 0:
+        return None
+
+    centers = [(w["x0"] + w["x1"]) / 2 for w in words if w.get("text", "").strip()]
+    if len(centers) < 20:
+        return None
+
+    mid = page_width / 2
+    left = sum(1 for c in centers if c < mid * 0.92)
+    right = sum(1 for c in centers if c > mid * 1.08)
+    total = len(centers)
+    if left < total * 0.12 or right < total * 0.12:
+        return None
+    return mid
+
+
+def _pdfplumber_page_to_lines(page) -> list[str]:
+    """Extract lines from a PDF page, reading each column top-to-bottom."""
+    words = page.extract_words(x_tolerance=2, y_tolerance=3, keep_blank_chars=False)
+    split = _detect_column_split(words, page.width)
+
+    def _crop_lines(bbox) -> list[str]:
+        cropped = page.crop(bbox)
+        text = cropped.extract_text(x_tolerance=2, y_tolerance=3)
+        return text.splitlines() if text else []
+
+    if split is None:
+        text = page.extract_text(x_tolerance=2, y_tolerance=3)
+        return text.splitlines() if text else []
+
+    gutter = 6
+    left_bbox = (0, 0, max(split - gutter, 0), page.height)
+    right_bbox = (min(split + gutter, page.width), 0, page.width, page.height)
+    lines: list[str] = []
+    lines.extend(_crop_lines(left_bbox))
+    if lines:
+        lines.append("")
+    lines.extend(_crop_lines(right_bbox))
+    return lines
+
+
+def _fitz_page_to_lines(page) -> list[str]:
+    """Column-aware line extraction via PyMuPDF word positions."""
+    words = page.get_text("words")
+    if not words:
+        return []
+
+    page_width = page.rect.width
+    word_dicts = [
+        {"text": w[4], "x0": w[0], "x1": w[2], "top": w[1], "bottom": w[3]}
+        for w in words
+        if w[4].strip()
+    ]
+    split = _detect_column_split(word_dicts, page_width)
+
+    def _cluster_to_lines(cluster_words: list) -> list[str]:
+        cluster_words.sort(key=lambda w: (round(w["top"], 1), w["x0"]))
+        lines_out: list[str] = []
+        current_top: float | None = None
+        current_parts: list[str] = []
+        for w in cluster_words:
+            top = round(w["top"], 1)
+            if current_top is None or abs(top - current_top) <= 3:
+                current_parts.append(w["text"])
+                current_top = top if current_top is None else current_top
+            else:
+                lines_out.append(" ".join(current_parts))
+                current_parts = [w["text"]]
+                current_top = top
+        if current_parts:
+            lines_out.append(" ".join(current_parts))
+        return lines_out
+
+    if split is None:
+        return _cluster_to_lines(word_dicts)
+
+    left_words = [w for w in word_dicts if (w["x0"] + w["x1"]) / 2 < split]
+    right_words = [w for w in word_dicts if (w["x0"] + w["x1"]) / 2 >= split]
+    lines: list[str] = []
+    lines.extend(_cluster_to_lines(left_words))
+    if lines:
+        lines.append("")
+    lines.extend(_cluster_to_lines(right_words))
+    return lines
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # .docx parser  — highlight-aware
 # ─────────────────────────────────────────────────────────────────────────────
@@ -354,90 +592,23 @@ def parse_docx(path: str) -> list[dict]:
     """
     doc = Document(path)
 
-    questions:   list[dict]           = []
-    answer_key:  dict[int, list[str]] = {}
-    current_section = ""
-    in_answer_key   = False
-    current_q: dict | None            = None
-    has_any_highlight                 = False
+    lines: list[str] = []
+    raw_lines: list[str] = []
+    highlights: list[str] = []
 
     for para in doc.paragraphs:
-        raw  = para.text
+        raw = para.text
         line = raw.strip()
         if not line:
             continue
+        lines.append(line)
+        raw_lines.append(raw)
+        highlights.append(_get_para_highlight(para))
 
-        highlight = _get_para_highlight(para)
-
-        # ── Answer-key section header ────────────────────────────────────────
-        if _ANSWER_KEY_HEADER_RE.match(line):
-            if current_q and len(current_q["choices"]) == 5:
-                questions.append(current_q)
-                current_q = None
-            in_answer_key = True
-            continue
-
-        # ── Text-based answer key rows ───────────────────────────────────────
-        if in_answer_key:
-            for num, letters in _parse_answer_key_line(line):
-                answer_key[num] = letters
-            continue
-
-        # ── Section heading ──────────────────────────────────────────────────
-        if (
-            not _Q_RE.match(line)
-            and not _CHOICE_RE.match(line)
-            and len(line) < 120
-            and (
-                re.match(r"^\s{2}.{3,}\s{2}$", raw)
-                or re.match(r"^[A-Z][^a-z]{4,}$", line)
-                or re.match(r"^(PART|Section|Chapter)\s", line, re.IGNORECASE)
-            )
-        ):
-            current_section = line
-            continue
-
-        # ── Question stem ────────────────────────────────────────────────────
-        m_q = _Q_RE.match(line)
-        if m_q:
-            if current_q and len(current_q["choices"]) == 5:
-                questions.append(current_q)
-            current_q = {
-                "num":     int(m_q.group(1)),
-                "stem":    m_q.group(2).strip(),
-                "choices": {},
-                "correct": [],
-                "section": current_section,
-            }
-            continue
-
-        # ── Choice line ──────────────────────────────────────────────────────
-        m_c = _CHOICE_RE.match(line)
-        if m_c and current_q is not None:
-            letter = m_c.group(1).upper()
-            text   = m_c.group(2).strip()
-            current_q["choices"][letter] = text
-
-            # Record highlight signal directly on this choice
-            if highlight == "correct":
-                has_any_highlight = True
-                if letter not in current_q["correct"]:
-                    current_q["correct"].append(letter)
-            elif highlight == "wrong":
-                has_any_highlight = True
-                # "wrong" just means don't add it — no action needed
-            continue
-
-        # ── Multi-line stem continuation ─────────────────────────────────────
-        if current_q is not None and not current_q["choices"]:
-            current_q["stem"] += " " + line
-
-    # Flush last question
-    if current_q and len(current_q["choices"]) == 5:
-        questions.append(current_q)
-
+    questions, answer_key, has_any_highlight = _parse_mcq_lines(
+        lines, raw_lines=raw_lines, highlights=highlights
+    )
     _apply_text_answer_key(questions, answer_key, has_any_highlight)
-
     return questions
 
 
@@ -482,21 +653,21 @@ def _pdf_highlight_map(path: str) -> dict[int, str]:
 
 
 def _pdf_to_lines(path: str) -> list[str]:
-    """Extract text lines from a PDF."""
+    """Extract text lines from a PDF, column-aware for two-column layouts."""
     lines: list[str] = []
     if PDFPLUMBER_OK:
         with pdfplumber.open(path) as pdf:
             for page in pdf.pages:
-                text = page.extract_text(x_tolerance=2, y_tolerance=3)
-                if text:
-                    lines.extend(text.splitlines())
+                page_lines = _pdfplumber_page_to_lines(page)
+                if page_lines:
+                    lines.extend(page_lines)
                     lines.append("")
     elif FITZ_OK:
         doc = fitz.open(path)
         for page in doc:
-            text = page.get_text("text")
-            if text:
-                lines.extend(text.splitlines())
+            page_lines = _fitz_page_to_lines(page)
+            if page_lines:
+                lines.extend(page_lines)
                 lines.append("")
         doc.close()
     else:
@@ -514,92 +685,13 @@ def parse_pdf(path: str) -> list[dict]:
       1. Highlight annotations on choice lines → answer key.
       2. Text-based ANSWER KEY section.
     """
-    # Build highlight map from annotations
-    hl_map = _pdf_highlight_map(path)   # { lowercased_text: "correct"|"wrong" }
-
+    hl_map = _pdf_highlight_map(path)
     lines = _pdf_to_lines(path)
 
-    questions:   list[dict]           = []
-    answer_key:  dict[int, list[str]] = {}
-    current_section = ""
-    in_answer_key   = False
-    current_q: dict | None            = None
-    has_any_highlight                 = bool(hl_map)
-
-    for raw in lines:
-        line = raw.strip()
-        if not line:
-            continue
-
-        # ── Answer-key section header ────────────────────────────────────────
-        if _ANSWER_KEY_HEADER_RE.match(line):
-            if current_q and len(current_q["choices"]) == 5:
-                questions.append(current_q)
-                current_q = None
-            in_answer_key = True
-            continue
-
-        if in_answer_key:
-            for num, letters in _parse_answer_key_line(line):
-                answer_key[num] = letters
-            continue
-
-        # ── Section heading ──────────────────────────────────────────────────
-        if (
-            not _Q_RE.match(line)
-            and not _CHOICE_RE.match(line)
-            and len(line) < 120
-            and (
-                re.match(r"^\s{2}.{3,}\s{2}$", raw)
-                or re.match(r"^[A-Z][^a-z]{4,}$", line)
-                or re.match(r"^(PART|Section|Chapter)\s", line, re.IGNORECASE)
-            )
-        ):
-            current_section = line
-            continue
-
-        # ── Question stem ────────────────────────────────────────────────────
-        m_q = _Q_RE.match(line)
-        if m_q:
-            if current_q and len(current_q["choices"]) == 5:
-                questions.append(current_q)
-            current_q = {
-                "num":     int(m_q.group(1)),
-                "stem":    m_q.group(2).strip(),
-                "choices": {},
-                "correct": [],
-                "section": current_section,
-            }
-            continue
-
-        # ── Choice line ──────────────────────────────────────────────────────
-        m_c = _CHOICE_RE.match(line)
-        if m_c and current_q is not None:
-            letter = m_c.group(1).upper()
-            text   = m_c.group(2).strip()
-            current_q["choices"][letter] = text
-
-            # Check if this line's text matches any highlight annotation
-            if hl_map:
-                # Try matching the full line or just the choice text
-                for candidate in (line.lower(), text.lower()):
-                    for hl_text, cls in hl_map.items():
-                        if candidate in hl_text or hl_text in candidate:
-                            if cls == "correct" and letter not in current_q["correct"]:
-                                current_q["correct"].append(letter)
-                            break
-            continue
-
-        # ── Multi-line stem continuation ─────────────────────────────────────
-        if current_q is not None and not current_q["choices"]:
-            current_q["stem"] += " " + line
-
-    # Flush last
-    if current_q and len(current_q["choices"]) == 5:
-        questions.append(current_q)
-
+    questions, answer_key, has_any_highlight = _parse_mcq_lines(
+        lines, hl_map=hl_map or None
+    )
     _apply_text_answer_key(questions, answer_key, has_any_highlight)
-
     return questions
 
 
