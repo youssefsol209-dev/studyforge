@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MCQFlush — MCQs & Anki from your documents</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Sora:wght@400;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+
+  <!-- ── NAV ── -->
+  <nav class="nav">
+    <div class="nav-inner">
+      <a href="#" class="logo">
+        <span class="logo-icon">📚</span>
+        MCQFlush
+      </a>
+      <ul class="nav-links">
+        <li><a href="#how">How it works</a></li>
+        <li><a href="#create">Create</a></li>
+        <li><a href="#library">Library</a></li>
+        <li><a href="#upload" class="btn btn-sm">Get started</a></li>
+      </ul>
+    </div>
+  </nav>
+
+  <!-- ── HERO ── -->
+  <section class="hero">
+    <div class="hero-bg"></div>
+    <div class="container">
+      <div class="badge">⚡ From document to quiz in seconds</div>
+      <h1>Turn your MCQ documents into<br /><span class="gradient-text">interactive practice tests</span></h1>
+      <p class="hero-sub">Upload a PDF or DOCX containing MCQs and get a fully interactive quiz — with answer checking, scoring, and Anki export — in seconds.</p>
+      <div class="hero-cta">
+        <a href="#upload" class="btn btn-primary">Start now</a>
+        <a href="#create" class="btn btn-outline" id="openCreateBtn">✏️ Create your own deck</a>
+        <a href="#how" class="btn btn-ghost">See how it works →</a>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── HOW IT WORKS ── -->
+  <section class="section" id="how">
+    <div class="container">
+      <div class="section-label">How it works</div>
+      <h2 class="section-title">Three steps, zero effort</h2>
+      <div class="steps">
+        <div class="step">
+          <div class="step-number">01</div>
+          <div class="step-icon">📄</div>
+          <h3>Upload your file</h3>
+          <p>Drop any PDF or DOCX — lecture slides, textbooks, past papers, clinical notes.</p>
+        </div>
+        <div class="step-arrow">→</div>
+        <div class="step">
+          <div class="step-number">02</div>
+          <div class="step-icon">⚙️</div>
+          <h3>Questions are built</h3>
+          <p>The document is parsed, highlights are detected, and structured MCQs are extracted automatically.</p>
+        </div>
+        <div class="step-arrow">→</div>
+        <div class="step">
+          <div class="step-number">03</div>
+          <div class="step-icon">🎯</div>
+          <h3>Study or export</h3>
+          <p>Practise interactively in the browser, or export a fully formatted Anki deck.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── UPLOAD & ACTION ZONE ── -->
+  <section class="section section-alt" id="upload">
+    <div class="container">
+      <div class="section-label">Upload</div>
+      <h2 class="section-title">Start with your document</h2>
+
+      <div class="upload-card">
+
+        <!-- Drop zone -->
+        <div class="upload-zone" id="dropZone">
+          <div class="upload-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+              <path d="M12 16V4m0 0L8 8m4-4l4 4" stroke-linecap="round" stroke-linejoin="round"/>
+              <path d="M3 16v2a3 3 0 003 3h12a3 3 0 003-3v-2" stroke-linecap="round"/>
+            </svg>
+          </div>
+          <p class="upload-title">Drag &amp; drop your file here</p>
+          <p class="upload-sub">or</p>
+          <label class="btn btn-primary" id="browseBtn">Browse files</label>
+          <input type="file" id="fileInput" accept=".pdf,.docx" hidden />
+          <p class="upload-hint">Supports PDF and DOCX · Max 50 MB</p>
+        </div>
+
+        <!-- File preview -->
+        <div class="file-preview" id="filePreview" hidden>
+          <div class="file-info">
+            <span class="file-thumb" id="fileThumb">📄</span>
+            <div>
+              <p class="file-name" id="fileName">document.pdf</p>
+              <p class="file-size" id="fileSize">2.4 MB</p>
+            </div>
+            <button class="remove-btn" id="removeFile" title="Remove file">✕</button>
+          </div>
+        </div>
+
+        <!-- Action buttons -->
+        <div class="action-row" id="actionRow" hidden>
+          <button class="btn btn-primary btn-lg" id="generateMCQ">
+            <svg viewBox="0 0 20 20" fill="currentColor" width="18"><path fill-rule="evenodd" d="M11.3 1.046A1 1 0 0112 2v5h4a1 1 0 01.82 1.573l-7 10A1 1 0 018 18v-5H4a1 1 0 01-.82-1.573l7-10a1 1 0 011.12-.38z" clip-rule="evenodd"/></svg>
+            <span>Generate MCQs</span>
+          </button>
+          <button class="btn btn-outline btn-lg" id="downloadAnki">
+            <svg viewBox="0 0 20 20" fill="currentColor" width="18"><path fill-rule="evenodd" d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm3.293-7.707a1 1 0 011.414 0L9 10.586V3a1 1 0 112 0v7.586l1.293-1.293a1 1 0 111.414 1.414l-3 3a1 1 0 01-1.414 0l-3-3a1 1 0 010-1.414z" clip-rule="evenodd"/></svg>
+            <span>Anki Deck</span>
+          </button>
+          <button class="btn btn-ghost btn-lg" id="exportJsonUpload">
+            <svg viewBox="0 0 20 20" fill="currentColor" width="18"><path fill-rule="evenodd" d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm3.293-7.707a1 1 0 011.414 0L9 10.586V3a1 1 0 112 0v7.586l1.293-1.293a1 1 0 111.414 1.414l-3 3a1 1 0 01-1.414 0l-3-3a1 1 0 010-1.414z" clip-rule="evenodd"/></svg>
+            <span>Export deck (.json)</span>
+          </button>
+        </div>
+
+        <!-- Processing state -->
+        <div class="processing" id="processing" hidden>
+          <div class="agent-pulse">
+            <span class="agent-dot"></span>
+            <span class="agent-dot"></span>
+            <span class="agent-dot"></span>
+          </div>
+          <p id="processingText">Processing your document…</p>
+        </div>
+
+      </div>
+    </div>
+  </section>
+
+  <!-- ── CREATE DECK ── -->
+  <section class="section section-alt" id="create" hidden>
+    <div class="container">
+      <div class="create-header">
+        <div>
+          <div class="section-label">Create</div>
+          <h2 class="section-title" style="margin-bottom:0">Build your own deck</h2>
+        </div>
+      </div>
+
+      <div class="create-card">
+
+        <!-- Deck name -->
+        <div class="create-deck-name-row">
+          <input class="create-deck-name" id="createDeckName" type="text" placeholder="Deck name (e.g. Cardiology Week 3)" maxlength="80" />
+        </div>
+
+        <!-- Questions list -->
+        <div id="createQuestionsList"></div>
+
+        <!-- Add question button -->
+        <button class="btn-add-question" id="addQuestionBtn">
+          <svg viewBox="0 0 20 20" fill="currentColor" width="16"><path fill-rule="evenodd" d="M10 3a1 1 0 011 1v5h5a1 1 0 110 2h-5v5a1 1 0 11-2 0v-5H4a1 1 0 110-2h5V4a1 1 0 011-1z" clip-rule="evenodd"/></svg>
+          Add question
+        </button>
+
+        <!-- Save actions -->
+        <div class="create-actions">
+          <button class="btn btn-primary btn-lg" id="saveDeckBtn">
+            <svg viewBox="0 0 20 20" fill="currentColor" width="18"><path d="M7.707 10.293a1 1 0 10-1.414 1.414l3 3a1 1 0 001.414 0l3-3a1 1 0 00-1.414-1.414L11 11.586V6h5a2 2 0 012 2v7a2 2 0 01-2 2H4a2 2 0 01-2-2V8a2 2 0 012-2h5v5.586l-1.293-1.293zM9 4a1 1 0 012 0v2H9V4z"/></svg>
+            Save to library
+          </button>
+          <button class="btn btn-outline btn-lg" id="studyDeckBtn">
+            <svg viewBox="0 0 20 20" fill="currentColor" width="18"><path fill-rule="evenodd" d="M11.3 1.046A1 1 0 0112 2v5h4a1 1 0 01.82 1.573l-7 10A1 1 0 018 18v-5H4a1 1 0 01-.82-1.573l7-10a1 1 0 011.12-.38z" clip-rule="evenodd"/></svg>
+            Study now
+          </button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── LIBRARY ── -->
+  <section class="section" id="library">
+    <div class="container">
+      <div class="library-header">
+        <div>
+          <div class="section-label">Library</div>
+          <h2 class="section-title" style="margin-bottom:0">Your saved decks</h2>
+        </div>
+        <div style="display:flex;gap:10px;align-items:center">
+          <label class="btn btn-sm btn-outline" id="importJsonLabel" title="Import a .MCQFlush.json file">
+            ⬆ Import .json
+            <input type="file" id="importJsonInput" accept=".json" hidden />
+          </label>
+          <button class="btn btn-sm btn-ghost" id="clearLibraryBtn">🗑 Clear all</button>
+        </div>
+      </div>
+      <div id="libraryEmpty" class="library-empty">
+        <span class="library-empty-icon">📂</span>
+        <p>No decks saved yet. Generate MCQs from a file and they'll appear here automatically.</p>
+      </div>
+      <div class="library-grid" id="libraryGrid"></div>
+    </div>
+  </section>
+
+  <!-- ── MCQ RESULTS ── -->
+  <section class="section" id="mcqSection" hidden>
+    <div class="container">
+      <div class="results-header">
+        <div>
+          <div class="section-label">Results</div>
+          <h2 class="section-title" style="margin-bottom:0">Your questions</h2>
+        </div>
+        <div class="results-controls">
+          <span class="mcq-count-badge" id="mcqCount">0 questions</span>
+          <button class="btn btn-sm btn-outline" id="reshuffleBtn">🔀 Reshuffle</button>
+          <button class="btn btn-sm btn-outline" id="downloadAnki2">
+            <svg viewBox="0 0 20 20" fill="currentColor" width="14"><path fill-rule="evenodd" d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm3.293-7.707a1 1 0 011.414 0L9 10.586V3a1 1 0 112 0v7.586l1.293-1.293a1 1 0 111.414 1.414l-3 3a1 1 0 01-1.414 0l-3-3a1 1 0 010-1.414z" clip-rule="evenodd"/></svg>
+            Anki
+          </button>
+          <button class="btn btn-sm btn-primary" id="exportJsonResults">
+            <svg viewBox="0 0 20 20" fill="currentColor" width="14"><path fill-rule="evenodd" d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm3.293-7.707a1 1 0 011.414 0L9 10.586V3a1 1 0 112 0v7.586l1.293-1.293a1 1 0 111.414 1.414l-3 3a1 1 0 01-1.414 0l-3-3a1 1 0 010-1.414z" clip-rule="evenodd"/></svg>
+            Export .json
+          </button>
+          <button class="btn btn-sm btn-ghost" id="resetBtn">← New file</button>
+        </div>
+      </div>
+
+      <!-- Progress bar -->
+      <div class="progress-bar-wrap">
+        <div class="progress-bar-track">
+          <div class="progress-bar-fill" id="progressFill"></div>
+        </div>
+        <span class="progress-label" id="progressLabel">1 / 0</span>
+      </div>
+
+      <div class="mcq-list" id="mcqList"></div>
+      <div id="scoreScreen" hidden></div>
+    </div>
+  </section>
+
+  <!-- ── FEATURES ── -->
+  <section class="section section-alt" id="features">
+    <div class="container">
+      <div class="section-label">Features</div>
+      <h2 class="section-title">Built for serious studying</h2>
+      <div class="features-grid">
+        <div class="feature-card">
+          <div class="feature-icon">🔍</div>
+          <h3>Highlight detection</h3>
+          <p>Colour highlights in your DOCX or PDF are read automatically to identify correct answers — no manual work needed.</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">🃏</div>
+          <h3>Anki-ready export</h3>
+          <p>Downloads a .apkg file named after your document, ready to import into Anki, AnkiDroid, or AnkiMobile.</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">🔀</div>
+          <h3>Shuffled every run</h3>
+          <p>Choices are reshuffled each session so you test understanding, not just position memory.</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">🔒</div>
+          <h3>Nothing stored on server</h3>
+          <p>Files are processed in memory and deleted immediately. Your notes stay on your machine.</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">📊</div>
+          <h3>Session scoring</h3>
+          <p>Track correct vs wrong with a live score and pie chart. Retry only the questions you missed.</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">📤</div>
+          <h3>Share your deck</h3>
+          <p>Export any deck as a .json file and share it. Anyone can import it and study the same questions.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── FOOTER ── -->
+  <footer class="footer">
+    <div class="container">
+      <div class="footer-inner">
+        <a href="#" class="logo">
+          <span class="logo-icon">📚</span> MCQFlush
+        </a>
+        <p class="footer-copy">© 2026 MCQFlush. Flush your MCQs into your brain.
+      </div>
+    </div>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>

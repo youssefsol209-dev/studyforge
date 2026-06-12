@@ -1,0 +1,17 @@
+{
+  "name": "studyforge",
+  "version": "1.0.0",
+  "description": "Turn PDFs and DOCX into MCQs and Anki decks",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "nodemon server.js"
+  },
+  "dependencies": {
+    "express": "^4.22.2",
+    "multer": "^2.0.1"
+  },
+  "devDependencies": {
+    "nodemon": "3.1.4"
+  }
+}
