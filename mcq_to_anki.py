@@ -301,20 +301,44 @@ _ANSWER_KEY_HEADER_RE = re.compile(
 _MIN_CHOICES = 4
 
 
+# Noise lines that appear as column headers/footers in two-column PDFs.
+# Matched case-insensitively against stripped lines before parsing.
+_TWO_COL_NOISE_RE = re.compile(
+    r"^(?:"
+    r"endo"                  # common document header
+    r"|k\.m\.h"              # author/footer stamp
+    r"|mcqs?"                # section label
+    r"|\d+\s*/\s*\d+"        # page numbers: 1/22, 2/22 …
+    r")$",
+    re.IGNORECASE,
+)
+
+
+def _strip_two_col_noise(lines: list[str]) -> list[str]:
+    """Remove known header/footer noise lines from a column's line list."""
+    return [l for l in lines if not _TWO_COL_NOISE_RE.match(l.strip())]
+
+
 def _match_question(line: str) -> tuple[int, str] | None:
     """Return (question_number, stem) for common numbered-question formats."""
     m = _Q_WITH_SEP_RE.match(line.strip())
     if not m:
         return None
+    num = int(m.group(1))
+    if num < 1:          # guard against decimals like "0.005" being parsed as Q0
+        return None
     stem = m.group(2).strip()
     if not stem:
         return None
-    return int(m.group(1)), stem
+    return num, stem
 
 
 def _match_question_num_only(line: str) -> int | None:
     m = _Q_NUM_ONLY_RE.match(line.strip())
-    return int(m.group(1)) if m else None
+    if not m:
+        return None
+    num = int(m.group(1))
+    return num if num >= 1 else None
 
 
 def _match_choice(line: str) -> tuple[str, str] | None:
@@ -653,13 +677,15 @@ def _page_words_to_lines(words: list[dict], page_width: float, layout: str) -> l
         split = page_width / 2
         left, right = _split_words_by_column(words, split)
         if left and right:
+            left_lines  = _strip_two_col_noise(_group_words_into_lines(left,  page_width=page_width))
+            right_lines = _strip_two_col_noise(_group_words_into_lines(right, page_width=page_width))
             lines: list[str] = []
             # Pass the full page_width so x_gap_threshold is based on the
             # whole page, not the narrow column — prevents "A." being split
             # from its indented choice text.
-            lines.extend(_group_words_into_lines(left, page_width=page_width))
+            lines.extend(left_lines)
             lines.append("")
-            lines.extend(_group_words_into_lines(right, page_width=page_width))
+            lines.extend(right_lines)
             return lines
 
     # 'single' (or two-column with all words on one side) → single stream
