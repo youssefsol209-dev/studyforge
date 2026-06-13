@@ -21,7 +21,9 @@ app.post('/api/mcqs', upload.single('file'), async (req, res) => {
     return res.status(400).json({ error: 'No file uploaded.' });
   }
   try {
-    const mcqs = await agent.generateMCQs(req.file);
+    const layout = req.body?.layout === 'two-column' ? 'two-column' : 'single';
+    console.log('[/api/mcqs] layout:', layout);
+    const mcqs = await agent.generateMCQs(req.file, layout);
     res.json(mcqs);
   } catch (err) {
     console.error('[/api/mcqs]', err);

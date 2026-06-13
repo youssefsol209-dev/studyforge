@@ -32,6 +32,7 @@ let shuffledMCQs = [];      // what's currently rendered (shuffled copy)
 let currentIdx   = 0;       // which question is active
 let score        = 0;       // how many answered correctly
 let wrongIndices = [];      // indices into shuffledMCQs that were wrong
+let twoColLayout = false;   // false = single column, true = two-column PDF mode
 
 // ── Drag & drop / file picker ─────────────────────────────
 dropZone.addEventListener('dragover', e => {
@@ -68,6 +69,9 @@ function setFile(file) {
   dropZone.hidden    = true;
   filePreview.hidden = false;
   actionRow.hidden   = false;
+  // Show layout toggle only for PDF files
+  const layoutRow = document.getElementById('layoutToggleRow');
+  if (layoutRow) layoutRow.hidden = !/\.pdf$/i.test(file.name);
 }
 
 function clearFile() {
@@ -76,6 +80,14 @@ function clearFile() {
   dropZone.hidden    = false;
   filePreview.hidden = true;
   actionRow.hidden   = true;
+  const layoutRow = document.getElementById('layoutToggleRow');
+  if (layoutRow) layoutRow.hidden = true;
+  // Reset column mode
+  twoColLayout = false;
+  const twoColBtn = document.getElementById('twoColBtn');
+  if (twoColBtn) twoColBtn.classList.remove('active');
+  const hint = document.getElementById('layoutHint');
+  if (hint) hint.textContent = 'Single column';
 }
 
 function formatBytes(b) {
@@ -474,6 +486,7 @@ generateBtn.addEventListener('click', async () => {
   await withProcessing('Generating your MCQs…', async () => {
     const form = new FormData();
     form.append('file', currentFile);
+    form.append('layout', twoColLayout ? 'two-column' : 'single');
 
     const res = await fetch('/api/mcqs', { method: 'POST', body: form });
 
@@ -547,6 +560,18 @@ function exportDeckJson() {
 
 document.getElementById('exportJsonUpload')?.addEventListener('click', exportDeckJson);
 document.getElementById('exportJsonResults')?.addEventListener('click', exportDeckJson);
+
+// ── Two-column toggle ─────────────────────────────────────
+(function () {
+  const btn  = document.getElementById('twoColBtn');
+  const hint = document.getElementById('layoutHint');
+  if (!btn) return;
+  btn.addEventListener('click', () => {
+    twoColLayout = !twoColLayout;
+    btn.classList.toggle('active', twoColLayout);
+    hint.textContent = twoColLayout ? '2-column mode ON' : 'Single column';
+  });
+})();
 
 // ── Reshuffle ─────────────────────────────────────────────
 document.getElementById('reshuffleBtn').addEventListener('click', () => {

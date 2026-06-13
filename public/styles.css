@@ -140,6 +140,15 @@ a { color: inherit; text-decoration: none; }
   border-color: var(--primary);
 }
 
+/* Active / toggled-on state for outline buttons */
+.btn-active {
+  background: rgba(124,109,250,0.2) !important;
+  border-color: var(--primary) !important;
+  color: var(--primary-h) !important;
+  box-shadow: 0 0 0 3px rgba(124,109,250,0.25);
+}
+
+
 .btn-ghost {
   background: transparent;
   color: var(--text-2);
@@ -399,12 +408,70 @@ a { color: inherit; text-decoration: none; }
   display: flex;
   gap: 12px;
   flex-wrap: wrap;
+  align-items: center;
   margin-top: 28px;
   padding-top: 28px;
   border-top: 1px solid var(--border);
 }
 
-.action-row .btn { flex: 1; min-width: 160px; justify-content: center; }
+.action-row .btn { flex: 1; min-width: 140px; justify-content: center; }
+
+/* PDF Layout picker */
+.layout-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.layout-picker-label {
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-3);
+  padding-left: 2px;
+}
+
+.layout-picker-btns {
+  display: flex;
+  border: 1.5px solid var(--border-2);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.layout-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 9px 16px;
+  font-family: 'Inter', sans-serif;
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+  border: none;
+  background: var(--surface-2);
+  color: var(--text-3);
+  transition: all 0.18s;
+  white-space: nowrap;
+}
+
+.layout-btn:first-child {
+  border-right: 1.5px solid var(--border-2);
+}
+
+.layout-btn:hover {
+  background: rgba(124,109,250,0.08);
+  color: var(--text-2);
+}
+
+.layout-btn-active {
+  background: rgba(124,109,250,0.18) !important;
+  color: var(--primary-h) !important;
+}
+
+.layout-btn-active svg { opacity: 1; }
+
 
 /* Processing */
 .processing {
@@ -513,6 +580,20 @@ a { color: inherit; text-decoration: none; }
   color: var(--accent);
   vertical-align: middle;
 }.mcq-choices { display: flex; flex-direction: column; gap: 10px; }
+
+/* Two-column choices layout (activated by toggle button) */
+.mcq-choices.two-col {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+/* Active state for the 2-column toggle button */
+.btn-outline.btn-active {
+  background: rgba(124,109,250,0.18);
+  border-color: var(--primary);
+  color: var(--primary-h);
+}
 
 .mcq-choice {
   display: flex;
@@ -1384,4 +1465,44 @@ a { color: inherit; text-decoration: none; }
   background: #0f2a1f;
   border: 1px solid rgba(52,211,153,0.4);
   color: var(--accent);
+}
+
+/* ── Layout toggle ── */
+.layout-toggle-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 0 4px;
+}
+
+.layout-toggle-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 16px;
+  border-radius: 999px;
+  border: 1.5px solid var(--border-2);
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.18s ease;
+}
+.layout-toggle-btn:hover {
+  border-color: var(--primary);
+  color: var(--primary-h);
+}
+.layout-toggle-btn.active {
+  background: rgba(124,109,250,0.15);
+  border-color: var(--primary);
+  color: var(--primary-h);
+  box-shadow: 0 0 0 3px rgba(124,109,250,0.15);
+}
+
+.layout-hint {
+  font-size: 12px;
+  color: var(--text-3);
+  font-style: italic;
+  transition: color 0.18s;
 }

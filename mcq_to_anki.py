@@ -267,16 +267,18 @@ _Q_NUM_ONLY_RE = re.compile(
     re.IGNORECASE,
 )
 
-# Choices: A.  A)  (A)  [A]  A-  A:  A text
+# Choices: A.  A)  (A)  [A]  A-  A:  A  text
+# Separator is REQUIRED so normal words starting with a-e
+# (e.g. "adrenocortical", "crisis)") are never mis-matched.
 _CHOICE_RE = re.compile(
     r"^(?:[\[\(]\s*)?"
     r"([A-Ea-e])"
     r"(?:[\]\)]\s*)?"
     r"(?:"
-    r"[\.\)\-:;]\s*"
+    r"[\.\\)\-:;]\s*"
     r"|"
-    r"\s+"
-    r")?"
+    r"\s+"           # at least one space counts as separator
+    r")"             # REQUIRED — no trailing ?
     r"(.*)$",
     re.IGNORECASE,
 )
@@ -575,34 +577,46 @@ def _parse_quality(questions: list[dict]) -> int:
     return score
 
 
-def _group_words_into_lines(words: list[dict], y_tolerance: float = 4.0) -> list[str]:
-    """Group positioned words into reading-order text lines."""
+def _group_words_into_lines(words: list[dict], y_tolerance: float = 5.0, page_width: float = None) -> list[str]:
+    """Group positioned words into reading-order text lines.
+
+    Uses each word's vertical midpoint ((top+bottom)/2) for row detection
+    so italic glyphs (which may have a different 'top' than regular text
+    on the same line) are still correctly grouped together.
+
+    page_width: if supplied, sets the x_gap_threshold based on the FULL page
+    width rather than just the column width. Pass this when processing a
+    half-page column so the threshold stays large enough to keep choice
+    labels ("A.") joined with their indented text.
+    """
     if not words:
         return []
 
-    max_x = max(w["x1"] for w in words)
-    x_gap_threshold = max(max_x * 0.12, 40)
+    ref_width = page_width if page_width is not None else max(w["x1"] for w in words)
+    x_gap_threshold = max(ref_width * 0.12, 40)
 
-    sorted_words = sorted(words, key=lambda w: (w["top"], w["x0"]))
+    # Sort by midpoint-y then x so italic/regular words on the same line
+    # end up adjacent in the list.
+    sorted_words = sorted(words, key=lambda w: ((w["top"] + w["bottom"]) / 2, w["x0"]))
     lines: list[str] = []
-    current_top: float | None = None
+    current_mid: float | None = None
     current_parts: list[str] = []
     prev_x1: float | None = None
 
     for w in sorted_words:
-        top = w["top"]
-        new_row = current_top is not None and abs(top - current_top) > y_tolerance
+        mid = (w["top"] + w["bottom"]) / 2
+        new_row = current_mid is not None and abs(mid - current_mid) > y_tolerance
         big_gap = prev_x1 is not None and (w["x0"] - prev_x1) > x_gap_threshold
 
         if new_row or big_gap:
             if current_parts:
                 lines.append(" ".join(current_parts))
             current_parts = [w["text"]]
-            current_top = top
+            current_mid = mid
         else:
             current_parts.append(w["text"])
-            if current_top is None:
-                current_top = top
+            if current_mid is None:
+                current_mid = mid
         prev_x1 = w["x1"]
 
     if current_parts:
@@ -626,29 +640,33 @@ def _split_words_by_column(words: list[dict], split: float) -> tuple[list[dict],
 def _page_words_to_lines(words: list[dict], page_width: float, layout: str) -> list[str]:
     """
     Build text lines from positioned words.
-    layout: 'auto' | 'single' | 'two-column'
+    layout: 'single' | 'two-column'
+
+    'single'     → read all words left-to-right, top-to-bottom as one stream.
+    'two-column' → split at page midpoint, read left column then right column.
     """
     if not words:
         return []
 
-    if layout == "single":
-        return _group_words_into_lines(words)
+    if layout == "two-column":
+        # Always split at the page midpoint — no auto-detection, no fallback.
+        split = page_width / 2
+        left, right = _split_words_by_column(words, split)
+        if left and right:
+            lines: list[str] = []
+            # Pass the full page_width so x_gap_threshold is based on the
+            # whole page, not the narrow column — prevents "A." being split
+            # from its indented choice text.
+            lines.extend(_group_words_into_lines(left, page_width=page_width))
+            lines.append("")
+            lines.extend(_group_words_into_lines(right, page_width=page_width))
+            return lines
 
-    split = _detect_column_split(words, page_width)
-    if layout == "two-column" and split is None:
-        # Do not force a mid-page split — that cuts single-column text in half.
-        return _group_words_into_lines(words)
+    # 'single' (or two-column with all words on one side) → single stream
+    return _group_words_into_lines(words)
 
-    if split is None:
-        return _group_words_into_lines(words)
 
-    left, right = _split_words_by_column(words, split)
-    lines: list[str] = []
-    lines.extend(_group_words_into_lines(left))
-    if lines and right:
-        lines.append("")
-    lines.extend(_group_words_into_lines(right))
-    return lines
+
 
 
 def _detect_column_split(words: list[dict], page_width: float) -> float | None:
@@ -684,18 +702,25 @@ def _detect_column_split(words: list[dict], page_width: float) -> float | None:
     return (max_left_x + min_right_x) / 2
 
 
-def _pdfplumber_page_to_lines(page, layout: str = "auto") -> list[str]:
-    """Extract lines from a PDF page using word positions (no cropping)."""
-    words = page.extract_words(x_tolerance=2, y_tolerance=3, keep_blank_chars=False)
+def _pdfplumber_page_to_lines(page, layout: str = "single") -> list[str]:
+    """
+    Extract lines from a PDF page.
+    y_tolerance=6 so italic/bold glyphs with slightly offset baselines
+    are still grouped onto the same text line as regular text.
+    """
+    words = page.extract_words(x_tolerance=3, y_tolerance=3, keep_blank_chars=False)
     return _page_words_to_lines(words, page.width, layout)
 
 
-def _fitz_page_to_lines(page, layout: str = "auto") -> list[str]:
-    """Column-aware line extraction via PyMuPDF word positions."""
+def _fitz_page_to_lines(page, layout: str = "single") -> list[str]:
+    """
+    Extract lines from a PDF page via PyMuPDF.
+    Uses get_text('words') so we can re-group with proper y_tolerance
+    to handle italic/bold font height differences.
+    """
     words = page.get_text("words")
     if not words:
         return []
-
     word_dicts = [
         {"text": w[4], "x0": w[0], "x1": w[2], "top": w[1], "bottom": w[3]}
         for w in words
@@ -704,10 +729,10 @@ def _fitz_page_to_lines(page, layout: str = "auto") -> list[str]:
     return _page_words_to_lines(word_dicts, page.rect.width, layout)
 
 
-def _pdf_to_lines(path: str, layout: str = "auto") -> list[str]:
+def _pdf_to_lines(path: str, layout: str = "single") -> list[str]:
     """
     Extract text lines from a PDF.
-    layout: 'auto' | 'single' | 'two-column'
+    layout: 'single' | 'two-column'
     """
     lines: list[str] = []
     if PDFPLUMBER_OK:
@@ -842,47 +867,42 @@ def _pdf_highlight_map(path: str) -> dict[int, str]:
     return result
 
 
-def parse_pdf(path: str) -> list[dict]:
+def parse_pdf(path: str, layout: str = "single") -> list[dict]:
     """
     Parse a PDF MCQ file.
-    Tries auto, single-column, and two-column extraction; keeps the best result.
+
+    layout:
+      'single'     — read the page as one column (default)
+      'two-column' — split each page at the midpoint and read left then right
+
+    The correct layout is always chosen explicitly by the user via the UI.
+    There is no auto-detection — what you pick is what gets used.
+
     Priority for answers:
       1. Highlight annotations on choice lines → answer key.
       2. Text-based ANSWER KEY section.
     """
     hl_map = _pdf_highlight_map(path) or None
 
-    best_questions: list[dict] = []
-    best_answer_key: dict[int, list[str]] = {}
-    best_has_highlight = False
-    best_score = -1
-
-    for layout in ("auto", "single", "two-column"):
-        lines = _pdf_to_lines(path, layout=layout)
-        questions, answer_key, has_any_highlight = _parse_mcq_lines(
-            lines, hl_map=hl_map
-        )
-        score = _parse_quality(questions)
-        if score > best_score:
-            best_score = score
-            best_questions = questions
-            best_answer_key = answer_key
-            best_has_highlight = has_any_highlight
-
-    _apply_text_answer_key(best_questions, best_answer_key, best_has_highlight)
-    return best_questions
+    # Use the explicitly chosen layout directly — no scoring loop
+    lines = _pdf_to_lines(path, layout=layout)
+    questions, answer_key, has_any_highlight = _parse_mcq_lines(
+        lines, hl_map=hl_map
+    )
+    _apply_text_answer_key(questions, answer_key, has_any_highlight)
+    return questions
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Dispatcher — pick parser by extension
 # ─────────────────────────────────────────────────────────────────────────────
 
-def parse_file(path: str) -> list[dict]:
+def parse_file(path: str, layout: str = "single") -> list[dict]:
     ext = Path(path).suffix.lower()
     if ext == ".docx":
         return parse_docx(path)
     elif ext == ".pdf":
-        return parse_pdf(path)
+        return parse_pdf(path, layout=layout)
     else:
         raise ValueError(f"Unsupported file type: {ext}  (use .docx or .pdf)")
 
