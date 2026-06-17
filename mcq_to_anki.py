@@ -116,11 +116,11 @@ FRONT_TEMPLATE = """
 <div class="card">
   <div class="stem">{{Stem}}</div>
   <ul class="choices">
-    <li>{{A}}</li>
-    <li>{{B}}</li>
-    <li>{{C}}</li>
-    <li>{{D}}</li>
-    <li>{{E}}</li>
+    {{#A}}<li>{{A}}</li>{{/A}}
+    {{#B}}<li>{{B}}</li>{{/B}}
+    {{#C}}<li>{{C}}</li>{{/C}}
+    {{#D}}<li>{{D}}</li>{{/D}}
+    {{#E}}<li>{{E}}</li>{{/E}}
   </ul>
 </div>
 """
@@ -298,7 +298,7 @@ _ANSWER_KEY_HEADER_RE = re.compile(
     r"^answer\s*keys?\s*(?:[:\-–—]|\s*$|\s+\S)", re.IGNORECASE
 )
 
-_MIN_CHOICES = 4
+_MIN_CHOICES = 2
 
 
 # Noise lines that appear as column headers/footers in two-column PDFs.
@@ -582,11 +582,8 @@ def _parse_quality(questions: list[dict]) -> int:
         elif len(stem) < 25:
             score -= 30
 
-        for letter in "ABCDE":
-            if letter not in q.get("choices", {}):
-                score -= 50
-                continue
-            text = q["choices"][letter].strip()
+        for letter, text_raw in q.get("choices", {}).items():
+            text = text_raw.strip()
             if len(text) < 10:
                 score -= 25
             # Clipped fragments from bad column splits
@@ -960,12 +957,13 @@ def build_back_html(q: dict) -> str:
     correct_set = set(q["correct"])
     items = []
     for letter in LETTERS:
-        text  = q["choices"].get(letter, "—")
-        label = f"<b>{letter})</b> {_esc(text)}"
-        if letter in correct_set:
-            items.append(f'<li class="correct">{label}</li>')
-        else:
-            items.append(f"<li>{label}</li>")
+        if letter in q["choices"]:
+            text  = q["choices"][letter]
+            label = f"<b>{letter})</b> {_esc(text)}"
+            if letter in correct_set:
+                items.append(f'<li class="correct">{label}</li>')
+            else:
+                items.append(f"<li>{label}</li>")
 
     correct_str = ", ".join(sorted(correct_set)) if correct_set else "Not specified"
     return (
@@ -984,11 +982,11 @@ def question_to_note(q: dict, model: genanki.Model) -> genanki.Note:
         model=model,
         fields=[
             _esc(q["stem"]),
-            f"<b>A)</b> {_esc(choices.get('A', ''))}",
-            f"<b>B)</b> {_esc(choices.get('B', ''))}",
-            f"<b>C)</b> {_esc(choices.get('C', ''))}",
-            f"<b>D)</b> {_esc(choices.get('D', ''))}",
-            f"<b>E)</b> {_esc(choices.get('E', ''))}",
+            f"<b>A)</b> {_esc(choices.get('A'))}" if 'A' in choices else "",
+            f"<b>B)</b> {_esc(choices.get('B'))}" if 'B' in choices else "",
+            f"<b>C)</b> {_esc(choices.get('C'))}" if 'C' in choices else "",
+            f"<b>D)</b> {_esc(choices.get('D'))}" if 'D' in choices else "",
+            f"<b>E)</b> {_esc(choices.get('E'))}" if 'E' in choices else "",
             build_back_html(q),
             sec_tag,
         ],
